@@ -1,0 +1,16 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Core ML Framework (PyTorch CPU backend for standalone Keras 3)
+torch==2.14.1+cpu
+keras==3.15.1
+numpy==1.26.4
+h5py==3.16.0
+
+# Image Preprocessing & Web Framework
+Pillow==10.4.0
+Flask==3.0.3
+Flask-Cors==4.0.2
+
+# Database Persistence (Pure Python MySQL Connector & Config)
+PyMySQL>=1.1.0
+python-dotenv>=1.0.0
