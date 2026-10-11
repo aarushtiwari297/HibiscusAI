@@ -28,14 +28,22 @@ logging.basicConfig(
 
 app = Flask(__name__)
 
-# Configure CORS for local development (Vite frontend on default port 5173 / localhost)
+import re
+LOCAL_ORIGIN_REGEX = re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$")
+
+# Configure CORS for local development (supports Vite / React dev & preview on localhost/127.0.0.1)
 CORS(
     app,
     resources={
         r"/api/*": {
             "origins": [
+                LOCAL_ORIGIN_REGEX,
                 "http://localhost:5173",
                 "http://127.0.0.1:5173",
+                "http://localhost:5174",
+                "http://127.0.0.1:5174",
+                "http://localhost:5175",
+                "http://127.0.0.1:5175",
                 "http://localhost:3000",
                 "http://127.0.0.1:3000"
             ],

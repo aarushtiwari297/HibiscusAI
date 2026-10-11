@@ -36,8 +36,14 @@ export default function App() {
   const checkHealth = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/health`);
-      if (response.ok) {
-        const data = await response.json();
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        // Non-JSON response
+      }
+
+      if (response.ok && data) {
         setBackendStatus('online');
         setModelReady(data.model_loaded === true);
         setDbConnected(data.database_connected === true);
@@ -45,12 +51,24 @@ export default function App() {
         if (data.database_connected) {
           fetchHistory();
         }
+      } else if (response.status === 503 && data) {
+        // Backend HTTP server is reachable, but model is not ready or service is degraded
+        setBackendStatus(data.model_loaded ? 'online' : 'degraded');
+        setModelReady(data.model_loaded === true);
+        setDbConnected(data.database_connected === true);
+        setDbStatusMsg(data.database_status || 'Service degraded.');
+      } else if (data) {
+        setBackendStatus(data.model_loaded ? 'online' : 'degraded');
+        setModelReady(Boolean(data.model_loaded));
+        setDbConnected(Boolean(data.database_connected));
+        setDbStatusMsg(data.database_status || 'Service degraded.');
       } else {
         setBackendStatus('offline');
         setModelReady(false);
         setDbConnected(false);
       }
     } catch {
+      // Network error, connection refused, or CORS failure - server is truly unreachable
       setBackendStatus('offline');
       setModelReady(false);
       setDbConnected(false);
@@ -257,13 +275,26 @@ export default function App() {
           {/* Status Badges Group */}
           <div className="status-group">
             {/* Backend ML Engine Status */}
-            <div className={`status-pill ${backendStatus === 'online' ? 'online' : 'offline'}`} title={`API URL: ${API_BASE_URL}`}>
+            <div
+              className={`status-pill ${
+                backendStatus === 'online' && modelReady
+                  ? 'online'
+                  : backendStatus === 'degraded' || (backendStatus === 'online' && !modelReady)
+                  ? 'degraded'
+                  : backendStatus === 'checking'
+                  ? 'checking'
+                  : 'offline'
+              }`}
+              title={`API URL: ${API_BASE_URL}`}
+            >
               <span className="status-dot"></span>
               <span>
-                {backendStatus === 'online'
-                  ? modelReady
-                    ? 'ML Engine Ready'
-                    : 'ML Degraded'
+                {backendStatus === 'checking'
+                  ? 'Connecting...'
+                  : backendStatus === 'online' && modelReady
+                  ? 'ML Engine Ready'
+                  : backendStatus === 'online' || backendStatus === 'degraded'
+                  ? 'ML Degraded'
                   : 'Backend Offline'}
               </span>
             </div>
@@ -379,7 +410,11 @@ export default function App() {
                     </div>
 
                     <div className="preview-actions">
-                      <button className="btn btn-primary" onClick={handleAnalyze} disabled={backendStatus !== 'online'}>
+                      <button
+                        className="btn btn-primary"
+                        onClick={handleAnalyze}
+                        disabled={backendStatus !== 'online' || !modelReady}
+                      >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                           <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
                         </svg>

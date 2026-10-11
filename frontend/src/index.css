@@ -157,6 +157,18 @@ body {
   border-color: #fecaca;
 }
 
+.status-pill.degraded {
+  background: #fffbeb;
+  color: #92400e;
+  border-color: #fde68a;
+}
+
+.status-pill.checking {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #cbd5e1;
+}
+
 .status-dot {
   width: 8px;
   height: 8px;
@@ -172,6 +184,16 @@ body {
 .status-pill.offline .status-dot {
   background: var(--color-red);
   box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+}
+
+.status-pill.degraded .status-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.25);
+}
+
+.status-pill.checking .status-dot {
+  background: #94a3b8;
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.25);
 }
 
 @keyframes pulse-dot {

@@ -24,7 +24,7 @@ DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_NAME = os.getenv("DB_NAME", "hibiscus_ai")
 DB_USER = os.getenv("DB_USER", "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-CONNECT_TIMEOUT = 2  # Fast failover if DB is offline
+CONNECT_TIMEOUT = 1  # Fast failover if DB is offline
 
 
 def get_db_connection(use_database: bool = True) -> pymysql.Connection:
