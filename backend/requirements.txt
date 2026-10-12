@@ -15,5 +15,9 @@ Flask-Cors==4.0.2
 PyMySQL>=1.1.0
 python-dotenv>=1.0.0
 
+# Visual Symptom Analysis (Google Gemini API)
+google-genai>=2.0.0
+
 # Production WSGI Server
 gunicorn
+

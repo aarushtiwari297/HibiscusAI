@@ -10,6 +10,12 @@ Exposes REST endpoints:
 import os
 import sys
 import logging
+from dotenv import load_dotenv
+
+# Explicitly load .env from the backend directory at startup with override=True
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=True)
+
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image
@@ -19,6 +25,10 @@ from predictor import predictor, ALLOWED_EXTENSIONS
 
 # Import database module for scan history persistence
 import database
+
+# Import Gemini visual symptom analyzer
+import gemini_analyzer
+
 
 # Configure standard logging
 logging.basicConfig(
@@ -45,7 +55,9 @@ CORS(
                 "http://localhost:5175",
                 "http://127.0.0.1:5175",
                 "http://localhost:3000",
-                "http://127.0.0.1:3000"
+                "http://127.0.0.1:3000",
+                "https://hibsicusai.netlify.app",
+                "https://hibiscusai.netlify.app"
             ],
             "methods": ["GET", "POST", "OPTIONS"],
             "allow_headers": ["Content-Type"]
@@ -69,17 +81,23 @@ except Exception as e:
 
 @app.route("/api/health", methods=["GET"])
 def health_check():
-    """Returns service health, model readiness, and database status without exposing secrets."""
+    """Returns service health, model readiness, Gemini readiness, and database status without exposing secrets."""
     model_ready = predictor is not None and predictor.is_ready()
     db_connected, db_message = database.check_db_status()
+    gemini_diag = gemini_analyzer.get_gemini_diagnostics()
+    gemini_ready = gemini_diag["key_configured"]
 
     return jsonify({
         "status": "healthy" if model_ready else "degraded",
         "model_loaded": model_ready,
+        "gemini_configured": gemini_ready,
+        "gemini_diagnostics": gemini_diag,
         "database_connected": db_connected,
         "database_status": db_message,
         "service": "Hibiscus Leaf Disease Detection ML API"
     }), (200 if model_ready else 503)
+
+
 
 
 @app.route("/api/predict", methods=["POST"])
@@ -162,6 +180,72 @@ def predict():
         result["saved_to_db"] = False
         result["scan_id"] = None
         result["db_status"] = "Database persistence failed."
+
+    return jsonify(result), 200
+
+
+@app.route("/api/classify-symptom", methods=["POST"])
+def classify_symptom():
+    """
+    Accepts an uploaded hibiscus leaf image file via multipart/form-data under key 'image'.
+    Calls Gemini API to analyze visual symptom categories (Stage 2 Visual Analysis):
+      - Healthy, Chewed, Dried, Leaf Spot, Yellowing, Other / Uncertain.
+    Returns structured JSON with category, visible symptoms, explanation, and uncertainty flag.
+    Preserves separation from the Keras binary ML model.
+    """
+    # 1. Validate multipart form contains 'image' field
+    if "image" not in request.files:
+        return jsonify({
+            "success": False,
+            "error": "Missing 'image' file in multipart form upload."
+        }), 400
+
+    file = request.files["image"]
+
+    # 2. Validate non-empty filename
+    if not file or file.filename.strip() == "":
+        return jsonify({
+            "success": False,
+            "error": "No file selected for upload."
+        }), 400
+
+    # 3. Validate allowed file extension
+    filename = file.filename
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({
+            "success": False,
+            "error": f"Unsupported file type '.{ext}'. Supported formats: {', '.join(sorted(ALLOWED_EXTENSIONS))}."
+        }), 400
+
+    # 4. Validate image data integrity using Pillow
+    try:
+        image = Image.open(file.stream)
+        image.verify()  # Verifies file header and image integrity
+        file.stream.seek(0)
+        image_bytes = file.stream.read()
+        file.stream.seek(0)
+    except Exception:
+        return jsonify({
+            "success": False,
+            "error": "The uploaded file could not be parsed as a valid image."
+        }), 400
+
+    # Map file extension to MIME type
+    mime_type_map = {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "webp": "image/webp"
+    }
+    mime_type = mime_type_map.get(ext, "image/jpeg")
+
+    # 5. Execute Gemini visual symptom classification
+    result = gemini_analyzer.analyze_leaf_symptoms(image_bytes=image_bytes, mime_type=mime_type)
+
+    if not result.get("success"):
+        status_code = 503 if result.get("code") == "MISSING_API_KEY" else 500
+        return jsonify(result), status_code
 
     return jsonify(result), 200
 

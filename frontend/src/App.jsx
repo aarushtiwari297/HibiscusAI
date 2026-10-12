@@ -22,8 +22,14 @@ export default function App() {
   // System & Database Health
   const [backendStatus, setBackendStatus] = useState('checking'); // 'online' | 'offline' | 'checking'
   const [modelReady, setModelReady] = useState(false);
+  const [geminiConfigured, setGeminiConfigured] = useState(false);
   const [dbConnected, setDbConnected] = useState(false);
   const [dbStatusMsg, setDbStatusMsg] = useState('');
+
+  // Stage 2: Gemini Visual Symptom Analysis State
+  const [symptomResult, setSymptomResult] = useState(null);
+  const [symptomLoading, setSymptomLoading] = useState(false);
+  const [symptomError, setSymptomError] = useState(null);
 
   // History state
   const [historyRecords, setHistoryRecords] = useState([]);
@@ -46,6 +52,7 @@ export default function App() {
       if (response.ok && data) {
         setBackendStatus('online');
         setModelReady(data.model_loaded === true);
+        setGeminiConfigured(Boolean(data.gemini_configured));
         setDbConnected(data.database_connected === true);
         setDbStatusMsg(data.database_status || '');
         if (data.database_connected) {
@@ -55,22 +62,26 @@ export default function App() {
         // Backend HTTP server is reachable, but model is not ready or service is degraded
         setBackendStatus(data.model_loaded ? 'online' : 'degraded');
         setModelReady(data.model_loaded === true);
+        setGeminiConfigured(Boolean(data.gemini_configured));
         setDbConnected(data.database_connected === true);
         setDbStatusMsg(data.database_status || 'Service degraded.');
       } else if (data) {
         setBackendStatus(data.model_loaded ? 'online' : 'degraded');
         setModelReady(Boolean(data.model_loaded));
+        setGeminiConfigured(Boolean(data.gemini_configured));
         setDbConnected(Boolean(data.database_connected));
         setDbStatusMsg(data.database_status || 'Service degraded.');
       } else {
         setBackendStatus('offline');
         setModelReady(false);
+        setGeminiConfigured(false);
         setDbConnected(false);
       }
     } catch {
       // Network error, connection refused, or CORS failure - server is truly unreachable
       setBackendStatus('offline');
       setModelReady(false);
+      setGeminiConfigured(false);
       setDbConnected(false);
     }
   };
@@ -174,12 +185,15 @@ export default function App() {
     setFileDetails(null);
     setPredictionResult(null);
     setErrorMessage(null);
+    setSymptomResult(null);
+    setSymptomError(null);
+    setSymptomLoading(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
-  // 3. Submit image for prediction & save history
+  // 3. Submit image for prediction & Gemini symptom classification
   const handleAnalyze = async () => {
     if (!selectedFile) return;
 
@@ -187,35 +201,118 @@ export default function App() {
     setErrorMessage(null);
     setPredictionResult(null);
 
+    setSymptomLoading(true);
+    setSymptomError(null);
+    setSymptomResult(null);
+
+    // Track formData for both requests
+    const predictFormData = new FormData();
+    predictFormData.append('image', selectedFile);
+
+    const symptomFormData = new FormData();
+    symptomFormData.append('image', selectedFile);
+
+    // Call 1: Primary Keras 3 Binary Prediction (preserved contract)
+    const runPredict = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/predict`, {
+          method: 'POST',
+          body: predictFormData,
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Failed to complete leaf disease diagnosis.');
+        }
+
+        setPredictionResult(data);
+
+        // Refresh scan history if database is active
+        if (data.saved_to_db) {
+          fetchHistory();
+        }
+      } catch (err) {
+        setErrorMessage(
+          err.message || 'Unable to communicate with the ML backend. Ensure the Flask server is running.'
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    // Call 2: Stage 2 Gemini Visual Symptom Classification
+    const runSymptomClassification = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/classify-symptom`, {
+          method: 'POST',
+          body: symptomFormData,
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          setSymptomError(data.error || 'Gemini visual symptom analysis was unavailable.');
+        } else {
+          setSymptomResult(data);
+        }
+      } catch (err) {
+        setSymptomError(
+          'Could not reach Gemini symptom analysis service. Ensure backend is running.'
+        );
+      } finally {
+        setSymptomLoading(false);
+      }
+    };
+
+    // Run both concurrently: Keras model finishes and displays immediately,
+    // while Gemini visual analysis streams its structured result into the symptom card.
+    await Promise.allSettled([runPredict(), runSymptomClassification()]);
+  };
+
+  // Re-run Gemini symptom classification independently if needed
+  const handleRetrySymptom = async () => {
+    if (!selectedFile) return;
+    setSymptomLoading(true);
+    setSymptomError(null);
     try {
       const formData = new FormData();
       formData.append('image', selectedFile);
-
-      const response = await fetch(`${API_BASE_URL}/api/predict`, {
+      const response = await fetch(`${API_BASE_URL}/api/classify-symptom`, {
         method: 'POST',
         body: formData,
       });
-
       const data = await response.json();
-
       if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to complete leaf disease diagnosis.');
+        setSymptomError(data.error || 'Gemini visual symptom analysis was unavailable.');
+      } else {
+        setSymptomResult(data);
       }
-
-      setPredictionResult(data);
-
-      // Refresh scan history if database is active
-      if (data.saved_to_db) {
-        fetchHistory();
-      }
-    } catch (err) {
-      setErrorMessage(
-        err.message || 'Unable to communicate with the ML backend. Ensure the Flask server is running.'
-      );
+    } catch {
+      setSymptomError('Could not reach Gemini symptom analysis service.');
     } finally {
-      setIsLoading(false);
+      setSymptomLoading(false);
     }
   };
+
+  const getCategoryClass = (category) => {
+    switch (category) {
+      case 'Healthy':
+        return 'category-healthy';
+      case 'Chewed':
+        return 'category-chewed';
+      case 'Dried':
+        return 'category-dried';
+      case 'Leaf Spot':
+        return 'category-leaf-spot';
+      case 'Yellowing':
+        return 'category-yellowing';
+      case 'Other / Uncertain':
+      default:
+        return 'category-uncertain';
+    }
+  };
+
 
   const loadingMessages = [
     "Resizing & formatting 224×224 RGB tensor...",
@@ -304,6 +401,17 @@ export default function App() {
               <span className="status-dot"></span>
               <span>
                 {dbConnected ? 'MySQL Connected' : 'MySQL Offline'}
+              </span>
+            </div>
+
+            {/* Gemini AI Status */}
+            <div
+              className={`status-pill ${geminiConfigured ? 'online' : 'checking'}`}
+              title={geminiConfigured ? 'Gemini Visual Analysis Configured' : 'GEMINI_API_KEY unconfigured (backend .env)'}
+            >
+              <span className="status-dot"></span>
+              <span>
+                {geminiConfigured ? 'Gemini Ready' : 'Gemini (No Key)'}
               </span>
             </div>
           </div>
@@ -559,6 +667,146 @@ export default function App() {
                       <div>
                         This decision threshold ({predictionResult.threshold}) is provisional, based on an empirical evaluation of 18 test images. The raw score is an uncalibrated sigmoid output and does not represent an absolute disease probability.
                       </div>
+                    </div>
+
+                    {/* Stage 2: Gemini Visual Symptom Category Analysis */}
+                    <div className="gemini-card">
+                      <div className="gemini-card-header">
+                        <div className="gemini-card-header-left">
+                          <div className="gemini-sparkle-icon">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                            </svg>
+                          </div>
+                          <div>
+                            <div className="gemini-card-title">
+                              Gemini Visual Symptom Classification
+                            </div>
+                            <div className="gemini-card-subtitle">
+                              Stage 2 Multimodal AI (Observable Damage Patterns)
+                            </div>
+                          </div>
+                        </div>
+
+                        {symptomResult?.model && (
+                          <span className="gemini-model-badge">
+                            {symptomResult.model}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Loading State */}
+                      {symptomLoading && (
+                        <div className="gemini-status-state loading">
+                          <div className="gemini-mini-spinner"></div>
+                          <div>
+                            <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-main)' }}>
+                              Analyzing visual foliage symptoms with Gemini...
+                            </div>
+                            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                              Categorizing observable patterns into Healthy, Chewed, Dried, Leaf Spot, or Yellowing.
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Error State */}
+                      {!symptomLoading && symptomError && (
+                        <div className="gemini-status-state error">
+                          <div style={{ display: 'flex', gap: '0.65rem', alignItems: 'flex-start', width: '100%' }}>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2.2">
+                              <circle cx="12" cy="12" r="10"/>
+                              <line x1="12" y1="8" x2="12" y2="12"/>
+                              <line x1="12" y1="16" x2="12.01" y2="16"/>
+                            </svg>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#991b1b' }}>
+                                Gemini Visual Analysis Unavailable
+                              </div>
+                              <div style={{ fontSize: '0.8rem', color: '#b91c1c', marginTop: '0.2rem' }}>
+                                {symptomError}
+                              </div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                                Primary Keras ML binary diagnosis above remains active and operational.
+                              </div>
+                              <button
+                                className="btn btn-secondary"
+                                onClick={handleRetrySymptom}
+                                style={{ marginTop: '0.6rem', fontSize: '0.78rem', padding: '0.3rem 0.75rem' }}
+                              >
+                                Retry Gemini Analysis
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Success / Result State */}
+                      {!symptomLoading && symptomResult && (
+                        <div className="gemini-result-body">
+                          {/* Suggested Category Badge & Confidence */}
+                          <div className="gemini-category-row">
+                            <div className="gemini-category-left">
+                              <span className="gemini-label">Suggested Symptom Category:</span>
+                              <span className={`gemini-category-pill ${getCategoryClass(symptomResult.category)}`}>
+                                {symptomResult.category}
+                              </span>
+                            </div>
+                            {symptomResult.confidence && (
+                              <span className="gemini-confidence-pill">
+                                Confidence: {symptomResult.confidence}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Uncertainty Warning Alert */}
+                          {symptomResult.uncertain && (
+                            <div className="gemini-uncertainty-alert">
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2.2">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                <line x1="12" y1="9" x2="12" y2="13"/>
+                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                              </svg>
+                              <div>
+                                <strong>Visual Uncertainty Notice:</strong> The model flagged uncertainty due to image resolution, blur, lighting, or ambiguous damage patterns. Do not treat as a conclusive assessment.
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Visible Evidence Chips */}
+                          {symptomResult.visible_symptoms && symptomResult.visible_symptoms.length > 0 && (
+                            <div className="gemini-evidence-box">
+                              <div className="gemini-evidence-heading">Visible Evidence Observed:</div>
+                              <div className="gemini-chips">
+                                {symptomResult.visible_symptoms.map((symptom, idx) => (
+                                  <span key={idx} className="gemini-chip">
+                                    • {symptom}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Short Explanation */}
+                          {symptomResult.explanation && (
+                            <div className="gemini-explanation">
+                              <strong>Analysis:</strong> {symptomResult.explanation}
+                            </div>
+                          )}
+
+                          {/* Disclaimer */}
+                          <div className="gemini-disclaimer">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <circle cx="12" cy="12" r="10"/>
+                              <line x1="12" y1="16" x2="12" y2="12"/>
+                              <line x1="12" y1="8" x2="12.01" y2="8"/>
+                            </svg>
+                            <span>
+                              {symptomResult.disclaimer || "Gemini-assisted analysis screens visible damage patterns only and is separate from the Keras binary prediction."}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Botanical Care Recommendations */}
