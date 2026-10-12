@@ -14,3 +14,6 @@ Flask-Cors==4.0.2
 # Database Persistence (Pure Python MySQL Connector & Config)
 PyMySQL>=1.1.0
 python-dotenv>=1.0.0
+
+# Production WSGI Server
+gunicorn
